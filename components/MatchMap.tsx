@@ -129,7 +129,7 @@ const TOTAL_TICKS      = 200;  // total steps across any match duration
 // SVG coordinate space is always 0–1024.  MAP_PX is the square map size at zoom=1.
 // The map is shown inside a landscape viewport (MAP_W × MAP_H) with overflow:hidden.
 
-const MAP_H     = 750;              // landscape viewport height (fixed)
+const MAP_H     = 620;              // landscape viewport height (fixed)
 const MAP_PX    = MAP_H;            // map square fits the viewport height at zoom=1
 const MAP_SCALE = MAP_PX / 1024;    // SVG coord → CSS pixel at zoom=1
 const MIN_ZOOM  = 0.5;
