@@ -1,12 +1,12 @@
 # Architecture
 
-## What We Built and Why
+## What I Built and Why
 
 A Next.js 15 web app that turns raw parquet telemetry from **Lila Black** into an interactive minimap visualizer. Two modes:
 - **Single-match** — load one match, scrub a timeline, or view full paths
 - **Multi-match** — aggregate 10–796 matches into heatmaps and event clusters
 
-**Why Next.js:** The server component model lets us read preprocessed JSON off disk at request time with no database. API routes handle the heavier aggregation work server-side, keeping the client bundle small. No external dependencies beyond React itself.
+**Why Next.js:** The server component model lets me read preprocessed JSON off disk at request time with no database. API routes handle the heavier aggregation work server-side, keeping the client bundle small. No external dependencies beyond React itself.
 
 **Why SVG (not Canvas):** Layer toggling, hover tooltips, and per-element event handling are trivial in SVG. Canvas would require manual hit-testing. For ~5,000 points per match the SVG approach is fast enough; multi-match data is pre-aggregated into 64×64 bins so the DOM stays bounded.
 
@@ -72,13 +72,13 @@ Per-map calibration values in `lib/mapConfig.ts`:
 | GrandRift | 581 | −290 | −290 |
 | Lockdown | 1000 | −500 | −500 |
 
-**How these were determined:** The `data/raw/README.md` documented the expected world-space bounds for each map. We derived `originX`/`originZ` as the minimum corner of each map's play area, and `scale` as the total world-space extent that maps to the full 1024px minimap. The Y-axis flip was discovered empirically — without it, all positions appear mirrored vertically against the minimap image.
+**How these were determined:** The `data/raw/README.md` documented the expected world-space bounds for each map. I derived `originX`/`originZ` as the minimum corner of each map's play area, and `scale` as the total world-space extent that maps to the full 1024px minimap. The Y-axis flip was discovered empirically — without it, all positions appear mirrored vertically against the minimap image.
 
 ---
 
 ## Assumptions Made Where Data Was Ambiguous
 
-| Ambiguity | What We Saw | How We Handled It |
+| Ambiguity | What I Saw | How I Handled It |
 |---|---|---|
 | Bot detection | Some user_ids are UUIDs (humans), others are plain integers | Classified integer user_ids as bots; UUID user_ids as humans |
 | Timestamp epoch | Timestamps parse to dates in 1970 (Unix epoch near-zero) | Treated them as match-relative milliseconds; used them only for ordering and timeline scrubbing, not wall-clock display |
@@ -90,7 +90,7 @@ Per-map calibration values in `lib/mapConfig.ts`:
 
 ## Major Tradeoffs
 
-| Decision | Alternative Considered | What We Chose and Why |
+| Decision | Alternative Considered | What I Chose and Why |
 |---|---|---|
 | Preprocess to JSON vs. read parquet at runtime | Stream parquet directly in Node.js API routes | Preprocess offline — Node parquet libraries are less mature; one-time cost, zero runtime overhead |
 | Server-side aggregation vs. client-side | Send all raw rows to client, aggregate in browser | Server-side — 796 matches × ~100 rows each is ~80K rows; browser computation is fine for single matches but unnecessary for multi-match where heatmap bins are the final product |
