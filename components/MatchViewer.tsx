@@ -602,7 +602,7 @@ export default function MatchViewer({ initialRows, initialMatchId, summary }: Pr
 
       {/* ── Sidebar ──────────────────────────────────────────────────────── */}
       <aside style={{
-        width: 320, background: "#161923",
+        width: 270, background: "#161923",
         borderRight: "1px solid #2d3148",
         flexShrink: 0, overflowY: "auto",
         display: "flex", flexDirection: "column",

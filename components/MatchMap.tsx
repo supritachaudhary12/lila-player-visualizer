@@ -129,7 +129,7 @@ const TOTAL_TICKS      = 200;  // total steps across any match duration
 // SVG coordinate space is always 0–1024.  MAP_PX is the square map size at zoom=1.
 // The map is shown inside a landscape viewport (MAP_W × MAP_H) with overflow:hidden.
 
-const MAP_H     = 620;              // landscape viewport height (fixed)
+const MAP_H     = 500;              // landscape viewport height (fixed)
 const MAP_PX    = MAP_H;            // map square fits the viewport height at zoom=1
 const MAP_SCALE = MAP_PX / 1024;    // SVG coord → CSS pixel at zoom=1
 const MIN_ZOOM  = 0.5;
@@ -1143,7 +1143,7 @@ export default function MatchMap({
 
         {/* ── Zoom controls — top-right corner ── */}
         <div style={{
-          position: "absolute", top: 10, right: 10, zIndex: 12,
+          position: "absolute", top: 40, right: 10, zIndex: 12,
           display: "flex", flexDirection: "column", gap: 4,
         }}>
           {[
