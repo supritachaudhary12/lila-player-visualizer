@@ -2,6 +2,8 @@
 
 An interactive minimap visualizer for player movement data from **Lila Black** — an extraction-style shooter. Supports single-match playback, multi-match heatmaps, and event overlays across three maps.
 
+**Live demo:** [https://lila-player-visualizer-three.vercel.app/](https://lila-player-visualizer-three.vercel.app/)
+
 ---
 
 ## Tech Stack
