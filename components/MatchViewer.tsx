@@ -121,7 +121,7 @@ function LegendRow({ icon, label }: { icon: React.ReactNode; label: string }) {
 
 const HEAT_GRADIENT: Record<string, [string, string, string]> = {
   traffic: ["hsl(200,100%,45%)", "hsl(60,100%,45%)",  "hsl(0,100%,45%)"],
-  kills:   ["hsl(60,100%,45%)",  "hsl(30,100%,45%)",  "hsl(0,100%,45%)"],
+  kills:   ["hsl(28,100%,55%)",  "hsl(14,100%,62%)",  "hsl(0,100%,70%)"],
   deaths:  ["hsl(280,90%,35%)",  "hsl(310,90%,55%)",  "hsl(340,90%,80%)"],
 };
 
@@ -151,7 +151,7 @@ function HeatGradient({ type }: { type: string }) {
 }
 
 function MultiLegend({ viewMode, heatmapType }: { viewMode: ViewMode; heatmapType: string }) {
-  if (viewMode === "heatmap") {
+  if (viewMode === "heatmap" || viewMode === "both") {
     return (
       <>
         <p style={SECTION_LABEL}>Density</p>
@@ -162,32 +162,152 @@ function MultiLegend({ viewMode, heatmapType }: { viewMode: ViewMode; heatmapTyp
       </>
     );
   }
-  if (viewMode === "movement") {
-    return (
-      <>
-        <p style={SECTION_LABEL}>Legend</p>
-        <LegendRow icon={<IcoHuman />} label="Human" />
-        <LegendRow icon={<IcoBot />}   label="Bot" />
-        <p style={{ fontSize: 11, color: "#64748b", margin: "4px 0 8px" }}>
-          Paths for up to 10 matches. Hover to highlight.
-        </p>
-        <LegendRow icon={<IcoKill />}  label="Kill / BotKill" />
-        <LegendRow icon={<IcoDeath />} label="Killed / BotKilled" />
-        <LegendRow icon={<IcoLoot />}  label="Loot" />
-        <LegendRow icon={<IcoStorm />} label="Killed by Storm" />
-      </>
-    );
-  }
+  return null;
+}
+
+// ── Insights section ─────────────────────────────────────────────────────────
+
+function gridArea(bx: number, by: number): string {
+  const h = bx < 22 ? "West" : bx < 43 ? "Center" : "East";
+  const v = by < 22 ? "North" : by < 43 ? "Mid"    : "South";
+  return h === "Center" && v === "Mid" ? "Center" : `${v}-${h}`;
+}
+
+function InsightsSection({
+  data, mapId, matchCount, totalCount, multiDates,
+}: {
+  data:        MultiMatchData | null;
+  mapId:       string;
+  matchCount:  number;
+  totalCount:  number;
+  multiDates:  string[];
+}) {
+  const storageKey = `insights_notes_${mapId}`;
+  const [notes, setNotes] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem(storageKey) ?? "";
+  });
+
+  const saveNotes = (val: string) => {
+    setNotes(val);
+    localStorage.setItem(storageKey, val);
+  };
+
+  const insights = useMemo(() => {
+    if (!data) return [];
+    const out: { icon: string; text: string }[] = [];
+
+    // Top kill zone
+    if (data.heatmapKills.length) {
+      const top = data.heatmapKills.reduce((a, b) => b.count > a.count ? b : a);
+      out.push({ icon: "🔴", text: `Kill hotspot: ${gridArea(top.bx, top.by)} (${top.count} kills)` });
+    }
+    // Top death zone
+    if (data.heatmapDeaths.length) {
+      const top = data.heatmapDeaths.reduce((a, b) => b.count > a.count ? b : a);
+      out.push({ icon: "✕", text: `Death hotspot: ${gridArea(top.bx, top.by)} (${top.count} deaths)` });
+    }
+    // Top traffic zone
+    if (data.heatmapTraffic.length) {
+      const top = data.heatmapTraffic.reduce((a, b) => b.count > a.count ? b : a);
+      out.push({ icon: "◈", text: `High traffic: ${gridArea(top.bx, top.by)} (${top.count.toLocaleString()} positions)` });
+    }
+    // Bot ratio in paths
+    if (data.paths.length) {
+      const bots  = data.paths.filter(p => p.isBot).length;
+      const pct   = Math.round((bots / data.paths.length) * 100);
+      out.push({ icon: "⬡", text: `Bot paths: ${pct}% of sampled movement` });
+    }
+    // Match coverage
+    out.push({ icon: "▦", text: `${matchCount} matches across ${multiDates.length} date${multiDates.length !== 1 ? "s" : ""}` });
+
+    return out;
+  }, [data, matchCount, multiDates]);
+
   return (
     <>
-      <p style={SECTION_LABEL}>Legend</p>
-      <LegendRow icon={<IcoKill />}  label="Kill / BotKill" />
-      <LegendRow icon={<IcoDeath />} label="Killed / BotKilled" />
-      <LegendRow icon={<IcoLoot />}  label="Loot" />
-      <LegendRow icon={<IcoStorm />} label="Killed by Storm" />
-      <p style={{ fontSize: 11, color: "#64748b", marginTop: 8 }}>
-        Hover a marker for details.
-      </p>
+      <p style={SECTION_LABEL}>Auto Insights</p>
+      {!data ? (
+        <p style={{ fontSize: 11, color: "#64748b" }}>Load matches to see insights.</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {insights.map(({ icon, text }, i) => (
+            <div key={i} style={{
+              display:      "flex", gap: 7, alignItems: "flex-start",
+              background:   "rgba(99,102,241,0.06)",
+              border:       "1px solid rgba(99,102,241,0.15)",
+              borderRadius: 5, padding: "5px 8px",
+            }}>
+              <span style={{ fontSize: 11, flexShrink: 0, marginTop: 1, color: "#6366f1" }}>{icon}</span>
+              <span style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>{text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p style={{ ...SECTION_LABEL, marginTop: 12 }}>Designer Notes</p>
+      <textarea
+        value={notes}
+        onChange={(e) => saveNotes(e.target.value)}
+        placeholder="Write observations, ideas, or issues…"
+        rows={5}
+        style={{
+          width:          "100%",
+          background:     "#0f1117",
+          border:         "1px solid #2d3148",
+          borderRadius:   6,
+          color:          "#e2e8f0",
+          fontSize:       12,
+          fontFamily:     "system-ui, sans-serif",
+          padding:        "8px 10px",
+          resize:         "vertical",
+          outline:        "none",
+          lineHeight:     1.55,
+        }}
+        onFocus={(e)  => { e.currentTarget.style.borderColor = "#6366f1"; }}
+        onBlur={(e)   => { e.currentTarget.style.borderColor = "#2d3148"; }}
+      />
+    </>
+  );
+}
+
+// ── Single-match insights ─────────────────────────────────────────────────────
+
+function SingleInsightsSection({ matchId }: { matchId: string }) {
+  const storageKey = `insights_notes_single_${matchId}`;
+  const [notes, setNotes] = useState(() =>
+    typeof window !== "undefined" ? (localStorage.getItem(storageKey) ?? "") : ""
+  );
+
+  // Re-load notes when match changes
+  useEffect(() => {
+    setNotes(typeof window !== "undefined" ? (localStorage.getItem(storageKey) ?? "") : "");
+  }, [storageKey]);
+
+  const saveNotes = (val: string) => {
+    setNotes(val);
+    localStorage.setItem(storageKey, val);
+  };
+
+  return (
+    <>
+      <p style={SECTION_LABEL}>Designer Notes</p>
+      <textarea
+        value={notes}
+        onChange={(e) => saveNotes(e.target.value)}
+        placeholder="Write observations, issues, or ideas for this match…"
+        rows={5}
+        style={{
+          width: "100%", background: "#0f1117",
+          border: "1px solid #2d3148", borderRadius: 6,
+          color: "#e2e8f0", fontSize: 12,
+          fontFamily: "system-ui, sans-serif",
+          padding: "8px 10px", resize: "vertical",
+          outline: "none", lineHeight: 1.55,
+        }}
+        onFocus={(e) => { e.currentTarget.style.borderColor = "#6366f1"; }}
+        onBlur={(e)  => { e.currentTarget.style.borderColor = "#2d3148"; }}
+      />
     </>
   );
 }
@@ -339,8 +459,8 @@ export default function MatchViewer({ initialRows, initialMatchId, summary }: Pr
   // ── Multi-match state ────────────────────────────────────────────────────────
   // Server returns pre-aggregated data — no raw rows stored on the client.
 
-  const [multiViewMode,     setMultiViewMode]     = useState<ViewMode>("heatmap");
-  const [heatmapType,       setHeatmapType]       = useState<HeatmapType>("traffic");
+  const [multiViewMode, setMultiViewMode] = useState<ViewMode>("heatmap");
+  const [heatmapType,   setHeatmapType]   = useState<HeatmapType>("traffic");
   const [multiMapId,        setMultiMapId]        = useState<MapId>(KNOWN_MAPS[0]);
   const [multiSelectedDates, setMultiSelectedDates] = useState<Set<string>>(new Set());
   const [multiData,         setMultiData]         = useState<MultiMatchData | null>(null);
@@ -482,7 +602,7 @@ export default function MatchViewer({ initialRows, initialMatchId, summary }: Pr
 
       {/* ── Sidebar ──────────────────────────────────────────────────────── */}
       <aside style={{
-        width: 220, background: "#161923",
+        width: 320, background: "#161923",
         borderRight: "1px solid #2d3148",
         flexShrink: 0, overflowY: "auto",
         display: "flex", flexDirection: "column",
@@ -543,13 +663,42 @@ export default function MatchViewer({ initialRows, initialMatchId, summary }: Pr
             {singleMatchEntries.length === 0 ? (
               <p style={{ fontSize: 11, color: "#64748b" }}>No matches available</p>
             ) : (
-              <select value={singleMatchId} onChange={(e) => setSingleMatchId(e.target.value)} style={SELECT}>
-                {singleMatchEntries.map((entry, i) => (
-                  <option key={entry.match_id} value={entry.match_id}>
-                    {fmtMatch(entry, i)}
-                  </option>
-                ))}
-              </select>
+              <div style={{
+                maxHeight:    160,
+                overflowY:    "auto",
+                borderRadius: 6,
+                border:       "1px solid #2d3148",
+                background:   "#0f1117",
+              }}>
+                {singleMatchEntries.map((entry, i) => {
+                  const active = entry.match_id === singleMatchId;
+                  return (
+                    <button
+                      key={entry.match_id}
+                      onClick={() => setSingleMatchId(entry.match_id)}
+                      style={{
+                        display:    "block",
+                        width:      "100%",
+                        textAlign:  "left",
+                        padding:    "7px 10px",
+                        fontSize:   12,
+                        fontFamily: "monospace",
+                        cursor:     "pointer",
+                        border:     "none",
+                        borderBottom: i < singleMatchEntries.length - 1 ? "1px solid #1e2132" : "none",
+                        background: active ? "rgba(99,102,241,0.15)" : "transparent",
+                        color:      active ? "#a5b4fc" : "#94a3b8",
+                        borderLeft: active ? "2px solid #6366f1" : "2px solid transparent",
+                        transition: "background 0.12s, color 0.12s",
+                      }}
+                      onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; e.currentTarget.style.color = "#e2e8f0"; } }}
+                      onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#94a3b8"; } }}
+                    >
+                      {fmtMatch(entry, i)}
+                    </button>
+                  );
+                })}
+              </div>
             )}
             {currentEntry && (
               <div style={{
@@ -611,6 +760,9 @@ export default function MatchViewer({ initialRows, initialMatchId, summary }: Pr
               <LayerRow checked={layers.loot}       onChange={() => toggleLayer("loot")}       label="Loot"><IcoLoot /></LayerRow>
               <LayerRow checked={layers.storm}      onChange={() => toggleLayer("storm")}      label="Killed by Storm"><IcoStorm /></LayerRow>
             </>)}
+
+            <div style={DIVIDER} />
+            <SingleInsightsSection matchId={singleMatchId} />
           </>)}
 
           {/* ── MULTI MODE ─────────────────────────────────────────────── */}
@@ -690,11 +842,11 @@ export default function MatchViewer({ initialRows, initialMatchId, summary }: Pr
             <button style={btn(multiViewMode === "heatmap")} onClick={() => setMultiViewMode("heatmap")}>
               Heatmap
             </button>
-            <button style={btn(multiViewMode === "events")} onClick={() => setMultiViewMode("events")}>
-              Events
+            <button style={btn(multiViewMode === "both")} onClick={() => setMultiViewMode("both")}>
+              Both
             </button>
 
-            {multiViewMode === "heatmap" && (<>
+            {(multiViewMode === "heatmap" || multiViewMode === "both") && (<>
               <div style={DIVIDER} />
               <p style={SECTION_LABEL}>Heatmap</p>
               <button style={btn(heatmapType === "traffic")} onClick={() => setHeatmapType("traffic")}>
@@ -708,21 +860,30 @@ export default function MatchViewer({ initialRows, initialMatchId, summary }: Pr
               </button>
             </>)}
 
-            {(multiViewMode === "movement" || multiViewMode === "events") && (<>
+            {(multiViewMode === "movement" || multiViewMode === "both") && (<>
               <div style={DIVIDER} />
               <p style={SECTION_LABEL}>Layers</p>
-              {multiViewMode === "movement" && (<>
-                <LayerRow checked={layers.humanPaths} onChange={() => toggleLayer("humanPaths")} label="Human paths"><IcoHuman /></LayerRow>
-                <LayerRow checked={layers.botPaths}   onChange={() => toggleLayer("botPaths")}   label="Bot paths"><IcoBot /></LayerRow>
-              </>)}
+              <LayerRow checked={layers.humanPaths} onChange={() => toggleLayer("humanPaths")} label="Human paths"><IcoHuman /></LayerRow>
+              <LayerRow checked={layers.botPaths}   onChange={() => toggleLayer("botPaths")}   label="Bot paths"><IcoBot /></LayerRow>
               <LayerRow checked={layers.kills}  onChange={() => toggleLayer("kills")}  label="Kill / BotKill"><IcoKill /></LayerRow>
               <LayerRow checked={layers.deaths} onChange={() => toggleLayer("deaths")} label="Death / BotKilled"><IcoDeath /></LayerRow>
               <LayerRow checked={layers.loot}   onChange={() => toggleLayer("loot")}   label="Loot"><IcoLoot /></LayerRow>
               <LayerRow checked={layers.storm}  onChange={() => toggleLayer("storm")}  label="Killed by Storm"><IcoStorm /></LayerRow>
             </>)}
 
+            {(multiViewMode === "heatmap" || multiViewMode === "both") && (<>
+              <div style={DIVIDER} />
+              <MultiLegend viewMode={multiViewMode} heatmapType={heatmapType} />
+            </>)}
+
             <div style={DIVIDER} />
-            <MultiLegend viewMode={multiViewMode} heatmapType={heatmapType} />
+            <InsightsSection
+              data={multiData}
+              mapId={multiMapId}
+              matchCount={matchCount}
+              totalCount={totalCount}
+              multiDates={[...multiSelectedDates]}
+            />
           </>)}
 
         </div>

@@ -16,7 +16,7 @@
  *   on the server; this component just renders what it receives.
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import Image from "next/image";
 import { MAP_CONFIGS, MapId, MapConfig } from "@/lib/mapConfig";
 import { worldToMinimap, PixelPoint } from "@/lib/coordUtils";
@@ -25,7 +25,7 @@ import { LayerFlags, HeatmapBin, EventPoint, MultiMatchData, HeatmapType } from 
 // ── Exported types ─────────────────────────────────────────────────────────────
 
 /** Multi-match view modes — also used as the ViewMode type in MatchViewer. */
-export type ViewMode = "movement" | "heatmap" | "events";
+export type ViewMode = "movement" | "heatmap" | "both";
 
 export interface MatchRow {
   user_id:  string;
@@ -125,6 +125,16 @@ function formatTime(ticks: number): string {
 const TICK_INTERVAL_MS = 50;   // real-time step interval
 const TOTAL_TICKS      = 200;  // total steps across any match duration
 
+// ── Map display size ─────────────────────────────────────────────────────────
+// SVG coordinate space is always 0–1024.  MAP_PX is the square map size at zoom=1.
+// The map is shown inside a landscape viewport (MAP_W × MAP_H) with overflow:hidden.
+
+const MAP_H     = 750;              // landscape viewport height (fixed)
+const MAP_PX    = MAP_H;            // map square fits the viewport height at zoom=1
+const MAP_SCALE = MAP_PX / 1024;    // SVG coord → CSS pixel at zoom=1
+const MIN_ZOOM  = 0.5;
+const MAX_ZOOM  = 6;
+
 // ── Grid constants ────────────────────────────────────────────────────────────
 
 const HEATMAP_BINS           = 64;
@@ -165,12 +175,12 @@ function toPolylinePoints(pts: PixelPoint[]): string {
 
 
 const HEAT_COLOR: Record<HeatmapType, (ratio: number) => string> = {
-  // cyan/blue (sparse) → yellow → red (dense)
-  traffic: (r) => `hsl(${Math.round(200 * (1 - r))}, 100%, 45%)`,
-  // yellow → orange → red
-  kills:   (r) => `hsl(${Math.round(60  * (1 - r))}, 100%, 45%)`,
-  // indigo → violet → white-pink
-  deaths:  (r) => `hsl(${Math.round(280 + r * 60)}, 90%, ${Math.round(35 + r * 45)}%)`,
+  // cyan → yellow → red
+  traffic: (r) => `hsl(${Math.round(200 * (1 - r))}, 100%, ${Math.round(50 + r * 15)}%)`,
+  // bright orange → deep orange → vivid red
+  kills:   (r) => `hsl(${Math.round(28 - r * 28)}, 100%, ${Math.round(55 + r * 15)}%)`,
+  // indigo → violet → hot pink
+  deaths:  (r) => `hsl(${Math.round(280 + r * 60)}, 100%, ${Math.round(45 + r * 35)}%)`,
 };
 
 // ── Marker shape renderer ─────────────────────────────────────────────────────
@@ -214,7 +224,7 @@ function HeatmapLayer({ bins, max, type }: { bins: HeatmapBin[]; max: number; ty
     <>
       <defs>
         <filter id="hm-blur" x="-25%" y="-25%" width="150%" height="150%">
-          <feGaussianBlur stdDeviation="8" />
+          <feGaussianBlur stdDeviation="5" />
         </filter>
       </defs>
       <g filter="url(#hm-blur)">
@@ -223,7 +233,7 @@ function HeatmapLayer({ bins, max, type }: { bins: HeatmapBin[]; max: number; ty
           return (
             <rect key={i} x={bx * BIN_PX} y={by * BIN_PX}
               width={BIN_PX} height={BIN_PX}
-              fill={colorFn(ratio)} fillOpacity={0.35 + ratio * 0.6} />
+              fill={colorFn(ratio)} fillOpacity={0.6 + ratio * 0.4} />
           );
         })}
       </g>
@@ -348,7 +358,7 @@ function PathsLayer({
               points={toPolylinePoints(track.points)}
               fill="none"
               stroke={track.isBot ? "#f97316" : "#22d3ee"}
-              strokeWidth={isHovered ? 2.5 : 1.5}
+              strokeWidth={isHovered ? 4 : 2.5}
               strokeOpacity={lineOpacity}
               strokeLinejoin="round"
               strokeLinecap="round"
@@ -467,10 +477,10 @@ function EventsLayer({
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 
-function Tooltip({ data }: { data: TooltipData }) {
+function Tooltip({ data, vx, vy }: { data: TooltipData; vx: number; vy: number }) {
   return (
     <div style={{
-      position: "absolute", left: data.pt.x, top: data.pt.y - 58,
+      position: "absolute", left: vx, top: vy - 58,
       transform: "translateX(-50%)",
       background: "rgba(10, 12, 20, 0.92)", border: "1px solid #2d3148",
       borderRadius: 6, padding: "6px 10px",
@@ -564,6 +574,82 @@ function ContextMenu({
   );
 }
 
+// ── Custom scrub bar ──────────────────────────────────────────────────────────
+
+function ScrubBar({
+  elapsed, duration, onChange,
+  style,
+}: {
+  elapsed:  number;
+  duration: number;
+  onChange: (v: number) => void;
+  style?:   React.CSSProperties;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [hovered, setHovered] = useState(false);
+  const pct = duration > 0 ? (elapsed / duration) * 100 : 0;
+
+  const seek = useCallback((e: React.MouseEvent | MouseEvent) => {
+    const el = trackRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    onChange(ratio * duration);
+  }, [duration, onChange]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    seek(e);
+    const move = (ev: MouseEvent) => seek(ev);
+    const up   = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }, [seek]);
+
+  return (
+    <div
+      ref={trackRef}
+      onMouseDown={handleMouseDown}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        position:    "relative",
+        height:      hovered ? 6 : 4,
+        borderRadius: 99,
+        background:  "rgba(255,255,255,0.1)",
+        cursor:      "pointer",
+        transition:  "height 0.15s",
+        flexShrink:  0,
+        ...style,
+      }}
+    >
+      {/* Filled track */}
+      <div style={{
+        position:     "absolute", left: 0, top: 0, bottom: 0,
+        width:        `${pct}%`,
+        borderRadius: 99,
+        background:   "linear-gradient(90deg, #4f52b8, #6366f1)",
+        pointerEvents: "none",
+      }} />
+      {/* Thumb */}
+      <div style={{
+        position:     "absolute",
+        top:          "50%",
+        left:         `${pct}%`,
+        transform:    "translate(-50%, -50%)",
+        width:        hovered ? 14 : 10,
+        height:       hovered ? 14 : 10,
+        borderRadius: "50%",
+        background:   "#6366f1",
+        border:       "2px solid #c7d2fe",
+        boxShadow:    "0 0 6px rgba(99,102,241,0.6)",
+        transition:   "width 0.15s, height 0.15s",
+        pointerEvents: "none",
+      }} />
+    </div>
+  );
+}
+
 // ── Timeline panel ────────────────────────────────────────────────────────────
 
 const TL_BTN: React.CSSProperties = {
@@ -585,7 +671,7 @@ function TimelinePanel({
 }) {
   return (
     <div style={{
-      width: 1024, background: "#1a1d27", border: "1px solid #2d3148",
+      width: "100%", background: "#1a1d27", border: "1px solid #2d3148",
       borderRadius: 8, padding: "12px 16px",
       display: "flex", flexDirection: "column", gap: 10,
     }}>
@@ -594,9 +680,7 @@ function TimelinePanel({
         <strong style={{ color: "#e2e8f0" }}>{formatTime(elapsed)}</strong>
         &nbsp;/&nbsp;{formatTime(duration)}
       </div>
-      <input type="range" min={0} max={duration} step={1} value={elapsed}
-        onChange={(e) => onScrub(Number(e.target.value))}
-        style={{ width: "100%", cursor: "pointer", accentColor: "#22d3ee" }} />
+      <ScrubBar elapsed={elapsed} duration={duration} onChange={onScrub} style={{ width: "100%" }} />
       <div style={{ display: "flex", gap: 8 }}>
         <button style={TL_BTN} onClick={isPlaying ? onPause : onPlay}>
           {isPlaying ? "Pause" : "Play"}
@@ -633,6 +717,87 @@ export default function MatchMap({
   const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => { setElapsed(0); setIsPlaying(false); }, [rows]);
+
+  // ── Zoom / pan state ────────────────────────────────────────────────────────
+
+  const [zoom,      setZoom]      = useState(1);
+  const [pan,       setPan]       = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [dragging,  setDragging]  = useState(false);
+  const [viewportW, setViewportW] = useState(0);
+  const dragRef        = useRef<{ mx: number; my: number; px: number; py: number } | null>(null);
+  const viewportRef    = useRef<HTMLDivElement>(null);
+  const panInitialized = useRef(false);
+
+  // Track viewport width so the map can be centered correctly
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setViewportW(entry.contentRect.width));
+    ro.observe(el);
+    setViewportW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+
+  const initPan = useCallback(
+    () => ({ x: (viewportW - MAP_PX) / 2, y: 0 }),
+    [viewportW]
+  );
+
+  // Reset zoom/pan when match, map, or tab changes (re-center based on current width)
+  useEffect(() => { setZoom(1); setPan(initPan()); }, [rows, mapId, isMultiMatch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-center once when viewport width is first measured
+  useEffect(() => {
+    if (viewportW > 0 && !panInitialized.current) {
+      panInitialized.current = true;
+      setPan(initPan());
+    }
+  }, [viewportW]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scroll-wheel zoom (non-passive so we can preventDefault)
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor   = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      const rect     = el.getBoundingClientRect();
+      const cx       = e.clientX - rect.left;
+      const cy       = e.clientY - rect.top;
+      setZoom((z) => {
+        const newZ   = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor));
+        const ratio  = newZ / z;
+        setPan((p)  => ({ x: cx - (cx - p.x) * ratio, y: cy - (cy - p.y) * ratio }));
+        return newZ;
+      });
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, []);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    dragRef.current = { mx: e.clientX, my: e.clientY, px: pan.x, py: pan.y };
+    setDragging(true);
+  }, [pan]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!dragRef.current) return;
+    setPan({
+      x: dragRef.current.px + e.clientX - dragRef.current.mx,
+      y: dragRef.current.py + e.clientY - dragRef.current.my,
+    });
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    dragRef.current = null;
+    setDragging(false);
+  }, []);
+
+  // SVG coord (0–1024) → viewport pixel (for tooltip positioning)
+  const svgToViewport = useCallback((pt: PixelPoint) => ({
+    x: pan.x + pt.x * MAP_SCALE * zoom,
+    y: pan.y + pt.y * MAP_SCALE * zoom,
+  }), [pan, zoom]);
 
   const stepPerTick = duration / TOTAL_TICKS;
 
@@ -675,14 +840,16 @@ export default function MatchMap({
   // ── Layer needs ─────────────────────────────────────────────────────────────
 
   const needPaths = isMultiMatch
-    ? multiViewMode === "movement"
+    ? multiViewMode === "movement" || multiViewMode === "both"
     : layers.humanPaths || layers.botPaths;
 
   const needEvents = isMultiMatch
-    ? (multiViewMode === "events" || multiViewMode === "movement")
+    ? multiViewMode === "movement" || multiViewMode === "both"
     : layers.kills || layers.deaths || layers.loot || layers.storm;
 
-  const needHeatmap = isMultiMatch && multiViewMode === "heatmap";
+  const needHeatmap = isMultiMatch
+    ? multiViewMode === "heatmap" || multiViewMode === "both"
+    : false;
 
   // ── Single-match layer data ─────────────────────────────────────────────────
 
@@ -702,7 +869,7 @@ export default function MatchMap({
   // Points are already in pixel space; isBot defaults to false (server doesn't
   // track per-path bot status — all paths render as the same color in multi mode)
   const multiTracks = useMemo<PlayerTrack[]>(() => {
-    if (!isMultiMatch || !multiData || multiViewMode !== "movement") return [];
+    if (!isMultiMatch || !multiData || (multiViewMode !== "movement" && multiViewMode !== "both")) return [];
     return multiData.paths.map((p) => ({
       userId: `${p.match_id}:${p.user_id}`,
       label:  matchLabels?.[p.match_id],
@@ -726,7 +893,7 @@ export default function MatchMap({
   );
 
   // Event clusters: server-aggregated for multi mode
-  const eventPoints = (isMultiMatch && multiData && (multiViewMode === "events" || multiViewMode === "movement"))
+  const eventPoints = (isMultiMatch && multiData && (multiViewMode === "movement" || multiViewMode === "both"))
     ? multiData.events
     : [];
 
@@ -775,14 +942,43 @@ export default function MatchMap({
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, width: "100%" }}>
 
-      <div style={{ position: "relative", width: 1024, height: 1024 }}>
-        <Image src={`/minimaps/${config.minimap}`} alt={mapId}
-          fill style={{ objectFit: "cover" }} priority />
+      {/* ── Landscape viewport ── */}
+      <div
+        ref={viewportRef}
+        style={{
+          position:   "relative",
+          width:      "100%",
+          height:     MAP_H,
+          overflow:   "hidden",
+          borderRadius: 8,
+          border:     "1px solid #2d3148",
+          cursor:     dragging ? "grabbing" : "grab",
+          userSelect: "none",
+        }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+      >
 
-        <svg viewBox="0 0 1024 1024"
-          style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}>
+        {/* ── Zoomable / pannable layer ── */}
+        <div style={{
+          position:        "absolute",
+          width:           MAP_PX,
+          height:          MAP_PX,
+          left:            0,
+          top:             0,
+          transform:       `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          transformOrigin: "0 0",
+          willChange:      "transform",
+        }}>
+          <Image src={`/minimaps/${config.minimap}`} alt={mapId}
+            fill style={{ objectFit: "cover" }} priority />
+
+          <svg viewBox="0 0 1024 1024"
+            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}>
 
           {/* Heatmap — multi-match only, server-aggregated bins */}
           {needHeatmap && (
@@ -834,9 +1030,157 @@ export default function MatchMap({
             />
           )}
         </svg>
+        </div>{/* end zoomable layer */}
 
-        {tooltip && <Tooltip data={tooltip} />}
-      </div>
+        {/* ── Tooltip — viewport-space absolute positioning ── */}
+        {tooltip && (() => {
+          const vp = svgToViewport(tooltip.pt);
+          return <Tooltip data={tooltip} vx={vp.x} vy={vp.y} />;
+        })()}
+
+        {/* ── Playback overlay (viewport-space, not zoomed) ── */}
+        {showTimeline && (<>
+
+          {/* Centered play / pause button */}
+          <div style={{
+            position: "absolute", top: "50%", left: "50%",
+            transform: "translate(-50%, -50%)", zIndex: 11,
+            pointerEvents: "none",
+          }}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isPlaying) { setIsPlaying(false); }
+                else { if (elapsed >= duration) setElapsed(0); setIsPlaying(true); }
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                pointerEvents: "all",
+                width: 64, height: 64, borderRadius: "50%",
+                background: "rgba(10,12,24,0.72)", border: "2px solid rgba(99,102,241,0.55)",
+                backdropFilter: "blur(6px)", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                opacity: isPlaying ? 0.15 : 0.9,
+                transition: "opacity 0.25s, border-color 0.2s",
+                boxShadow: "0 2px 20px rgba(0,0,0,0.6)",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.borderColor = "rgba(99,102,241,0.9)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = isPlaying ? "0.15" : "0.9"; e.currentTarget.style.borderColor = "rgba(99,102,241,0.55)"; }}
+            >
+              {isPlaying
+                ? <svg width={22} height={22} viewBox="0 0 22 22"><rect x={3} y={2} width={6} height={18} rx={1.5} fill="#e2e8f0"/><rect x={13} y={2} width={6} height={18} rx={1.5} fill="#e2e8f0"/></svg>
+                : <svg width={22} height={22} viewBox="0 0 22 22"><polygon points="5,2 20,11 5,20" fill="#e2e8f0"/></svg>
+              }
+            </button>
+          </div>
+
+          {/* Bottom control bar */}
+          <div
+            style={{
+              position:       "absolute", bottom: 0, left: 0, right: 0, zIndex: 12,
+              background:     "rgba(10,12,24,0.78)",
+              backdropFilter: "blur(8px)",
+              borderTop:      "1px solid rgba(45,49,72,0.8)",
+              padding:        "8px 14px 10px",
+              display:        "flex", alignItems: "center", gap: 10,
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {/* Play / Pause (small, in bar) */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isPlaying) { setIsPlaying(false); }
+                else { if (elapsed >= duration) setElapsed(0); setIsPlaying(true); }
+              }}
+              style={{
+                width: 30, height: 30, borderRadius: "50%", flexShrink: 0,
+                background: "transparent", border: "1px solid #3d4168",
+                color: "#e2e8f0", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "#2d3148"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              {isPlaying
+                ? <svg width={12} height={12} viewBox="0 0 12 12"><rect x={1} y={0} width={4} height={12} rx={1} fill="#e2e8f0"/><rect x={7} y={0} width={4} height={12} rx={1} fill="#e2e8f0"/></svg>
+                : <svg width={12} height={12} viewBox="0 0 12 12"><polygon points="2,0 12,6 2,12" fill="#e2e8f0"/></svg>
+              }
+            </button>
+
+            {/* Reset */}
+            <button
+              onClick={(e) => { e.stopPropagation(); setIsPlaying(false); setElapsed(0); }}
+              title="Reset"
+              style={{
+                width: 30, height: 30, borderRadius: 6, flexShrink: 0,
+                background: "transparent", border: "1px solid #3d4168",
+                color: "#94a3b8", cursor: "pointer", fontSize: 14,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "#2d3148"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >↺</button>
+
+            {/* Elapsed time */}
+            <span style={{
+              fontFamily: "monospace", fontSize: 12, color: "#94a3b8",
+              flexShrink: 0, minWidth: 90,
+            }}>
+              {formatTime(elapsed)} / {formatTime(duration)}
+            </span>
+
+            {/* Scrub bar */}
+            <ScrubBar
+              elapsed={elapsed}
+              duration={duration}
+              onChange={(v) => { setIsPlaying(false); setElapsed(v); }}
+              style={{ flex: 1 }}
+            />
+          </div>
+
+        </>)}
+
+        {/* ── Zoom controls — top-right corner ── */}
+        <div style={{
+          position: "absolute", top: 10, right: 10, zIndex: 12,
+          display: "flex", flexDirection: "column", gap: 4,
+        }}>
+          {[
+            { label: "+", title: "Zoom in",  onClick: () => setZoom((z) => Math.min(MAX_ZOOM, z * 1.3)) },
+            { label: "−", title: "Zoom out", onClick: () => setZoom((z) => { const nz = Math.max(MIN_ZOOM, z / 1.3); setPan((p) => ({ x: p.x * nz/z, y: p.y * nz/z })); return nz; }) },
+            { label: "⤢", title: "Reset zoom", onClick: () => { setZoom(1); setPan(initPan()); } },
+          ].map(({ label, title, onClick }) => (
+            <button
+              key={label}
+              title={title}
+              onClick={(e) => { e.stopPropagation(); onClick(); }}
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                width: 30, height: 30, borderRadius: 6,
+                background: "rgba(10,12,24,0.72)", border: "1px solid #2d3148",
+                color: "#e2e8f0", fontSize: label === "⤢" ? 14 : 18,
+                cursor: "pointer", display: "flex", alignItems: "center",
+                justifyContent: "center", backdropFilter: "blur(4px)",
+                lineHeight: 1,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "#2d3148"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(10,12,24,0.72)"; }}
+            >
+              {label}
+            </button>
+          ))}
+          {zoom !== 1 && (
+            <div style={{
+              fontSize: 10, color: "#64748b", textAlign: "center",
+              fontFamily: "monospace", marginTop: 2,
+            }}>
+              {zoom.toFixed(1)}×
+            </div>
+          )}
+        </div>
+
+      </div>{/* end viewport */}
 
       {contextMenu && (
         <ContextMenu
@@ -846,21 +1190,6 @@ export default function MatchMap({
         />
       )}
 
-      {/* Timeline — Playback mode only */}
-      {showTimeline && (
-        <TimelinePanel
-          elapsed={elapsed}
-          duration={duration}
-          isPlaying={isPlaying}
-          onScrub={(v) => { setIsPlaying(false); setElapsed(v); }}
-          onPlay={() => {
-            if (elapsed >= duration) setElapsed(0);
-            setIsPlaying(true);
-          }}
-          onPause={() => setIsPlaying(false)}
-          onReset={() => { setIsPlaying(false); setElapsed(0); }}
-        />
-      )}
     </div>
   );
 }

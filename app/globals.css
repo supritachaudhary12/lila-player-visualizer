@@ -10,3 +10,23 @@ html, body {
   background: #0f1117;
   color: #e2e8f0;
 }
+
+/* ── Custom scrollbar ─────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #3d4168;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #6366f1;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3d4168 transparent;
+}
